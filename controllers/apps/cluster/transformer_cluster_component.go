@@ -634,14 +634,22 @@ func (c *phasePrecondition) shardingMatch(transCtx *clusterTransformContext, dag
 }
 
 func (c *phasePrecondition) expected(comp *appsv1.Component) bool {
-	if comp.Generation == comp.Status.ObservedGeneration {
-		expect := appsv1.RunningComponentPhase
-		if comp.Spec.Stop != nil && *comp.Spec.Stop {
-			expect = appsv1.StoppedComponentPhase
-		}
-		return comp.Status.Phase == expect
+	return componentIsReady(comp)
+}
+
+// componentIsReady reports whether a Component has fully reconciled to its desired
+// state: its latest generation has been observed and it is in the expected phase
+// (Running, or Stopped when stopped). Used to gate serial rollouts and predecessor
+// readiness.
+func componentIsReady(comp *appsv1.Component) bool {
+	if comp == nil || comp.Generation != comp.Status.ObservedGeneration {
+		return false
 	}
-	return false
+	expect := appsv1.RunningComponentPhase
+	if comp.Spec.Stop != nil && *comp.Spec.Stop {
+		expect = appsv1.StoppedComponentPhase
+	}
+	return comp.Status.Phase == expect
 }
 
 type clusterCompNShardingHandler struct {
@@ -884,12 +892,11 @@ func (h *clusterShardingHandler) update(transCtx *clusterTransformContext, dag *
 
 	toCreate, toDelete, toUpdate := mapDiff(runningCompsMap, protoCompsMap)
 
-	// TODO: update strategy
 	h.deleteComps(transCtx, dag, runningCompsMap, toDelete)
-	h.updateComps(transCtx, dag, runningCompsMap, protoCompsMap, toUpdate)
+	updateErr := h.updateComps(transCtx, dag, name, runningCompsMap, protoCompsMap, toUpdate)
 	h.createComps(transCtx, dag, protoCompsMap, toCreate)
 
-	return nil
+	return updateErr
 }
 
 func (h *clusterShardingHandler) createComps(transCtx *clusterTransformContext, dag *graph.DAG,
@@ -910,15 +917,55 @@ func (h *clusterShardingHandler) deleteComps(transCtx *clusterTransformContext, 
 	}
 }
 
-func (h *clusterShardingHandler) updateComps(transCtx *clusterTransformContext, dag *graph.DAG,
-	runningComps map[string]*appsv1.Component, protoComps map[string]*appsv1.Component, updateSet sets.Set[string]) {
+func (h *clusterShardingHandler) updateComps(transCtx *clusterTransformContext, dag *graph.DAG, shardingName string,
+	runningComps map[string]*appsv1.Component, protoComps map[string]*appsv1.Component, updateSet sets.Set[string]) error {
 	graphCli, _ := transCtx.Client.(model.GraphClient)
-	for name := range updateSet {
-		running, proto := runningComps[name], protoComps[name]
+
+	// Serial update strategy: roll one shard at a time, waiting for each shard's
+	// Component to return to a ready, observed state before starting the next.
+	// This keeps the rest of the sharding stable while a shard reconfigures (e.g.
+	// a primary switchover), which the parallel rollout cannot guarantee.
+	if h.serialUpdate(transCtx, shardingName) {
+		for _, compName := range sets.List(updateSet) {
+			running, proto := runningComps[compName], protoComps[compName]
+			if obj := copyAndMergeComponent(running, proto); obj != nil {
+				graphCli.Update(dag, running, obj)
+				return ictrlutil.NewDelayedRequeueError(0,
+					fmt.Sprintf("serial sharding update: rolling shard %s", compName))
+			}
+			if !componentIsReady(running) {
+				return ictrlutil.NewDelayedRequeueError(0,
+					fmt.Sprintf("serial sharding update: waiting for shard %s to be ready", compName))
+			}
+		}
+		return nil
+	}
+
+	for compName := range updateSet {
+		running, proto := runningComps[compName], protoComps[compName]
 		if obj := copyAndMergeComponent(running, proto); obj != nil {
 			graphCli.Update(dag, running, obj)
 		}
 	}
+	return nil
+}
+
+// serialUpdate reports whether the sharding opts in to serial (one-shard-at-a-time)
+// updates. Conservative by design: only an explicit Serial enables it; Parallel or
+// an unset/absent strategy preserves the original parallel behavior so existing
+// clusters are unaffected.
+func (h *clusterShardingHandler) serialUpdate(transCtx *clusterTransformContext, shardingName string) bool {
+	var shardingDefName string
+	for _, s := range transCtx.shardings {
+		if s != nil && s.Name == shardingName {
+			shardingDefName = s.ShardingDef
+			break
+		}
+	}
+	shardingDef := transCtx.shardingDefs[shardingDefName]
+	return shardingDef != nil &&
+		shardingDef.Spec.UpdateStrategy != nil &&
+		*shardingDef.Spec.UpdateStrategy == appsv1.SerialStrategy
 }
 
 func (h *clusterShardingHandler) protoComps(transCtx *clusterTransformContext, name string, running *appsv1.Component) ([]*appsv1.Component, error) {
