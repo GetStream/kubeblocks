@@ -76,6 +76,23 @@ func (t *clusterShardingAccountTransformer) reconcileShardingAccounts(transCtx *
 
 func (t *clusterShardingAccountTransformer) reconcileShardingAccount(transCtx *clusterTransformContext,
 	graphCli model.GraphClient, dag *graph.DAG, sharding *appsv1.ClusterSharding, accountName string) error {
+	// Externally-managed short-circuit: when the cluster opts in for this account,
+	// KubeBlocks does not create the per-sharding consolidation secret and does
+	// not rewrite the user-provided SecretRef. The chart's SecretRef stays on
+	// sharding.Template.SystemAccounts, propagates to each shard's Component, and
+	// the per-component reconciler (transformer_component_account.go) copies the
+	// password key verbatim, including an empty value, into the derived account
+	// secret. Net effect: a truly blank-auth cluster when the user-provided
+	// secret has an empty password key.
+	if compAccount := lookupComponentSystemAccount(sharding, accountName); compAccount != nil &&
+		ptr.Deref(compAccount.ExternallyManaged, false) {
+		if compAccount.SecretRef == nil {
+			return fmt.Errorf("externallyManaged systemAccount %q on sharding %q requires SecretRef",
+				accountName, sharding.Name)
+		}
+		return nil
+	}
+
 	exist, err := t.checkSystemAccountSecret(transCtx, sharding, accountName)
 	if err != nil {
 		return err
@@ -92,6 +109,17 @@ func (t *clusterShardingAccountTransformer) reconcileShardingAccount(transCtx *c
 
 	t.rewriteSystemAccount(transCtx, sharding.Name, accountName)
 
+	return nil
+}
+
+// lookupComponentSystemAccount finds the cluster-side override (if any) for a
+// given account name in the sharding's template.
+func lookupComponentSystemAccount(sharding *appsv1.ClusterSharding, accountName string) *appsv1.ComponentSystemAccount {
+	for i := range sharding.Template.SystemAccounts {
+		if sharding.Template.SystemAccounts[i].Name == accountName {
+			return &sharding.Template.SystemAccounts[i]
+		}
+	}
 	return nil
 }
 

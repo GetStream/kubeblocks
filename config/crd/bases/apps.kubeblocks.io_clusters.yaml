@@ -4105,6 +4105,20 @@ spec:
                             default: false
                             description: Specifies whether the system account is disabled.
                             type: boolean
+                          externallyManaged:
+                            default: false
+                            description: |-
+                              ExternallyManaged signals that the account is managed by something outside
+                              KubeBlocks (Vault, External Secrets, a chart-provided static secret, etc.).
+                              When true, KubeBlocks does not generate a password and does not create or
+                              rewrite a derived account secret; the user-provided SecretRef is treated as
+                              the authoritative source, with its password field copied verbatim (including
+                              empty values) into the per-component account secret consumed by env vars.
+                              SecretRef must be set when this is true.
+
+
+                              This field is immutable once set.
+                            type: boolean
                           name:
                             description: The name of the system account.
                             type: string
@@ -11647,6 +11661,20 @@ spec:
                                 default: false
                                 description: Specifies whether the system account
                                   is disabled.
+                                type: boolean
+                              externallyManaged:
+                                default: false
+                                description: |-
+                                  ExternallyManaged signals that the account is managed by something outside
+                                  KubeBlocks (Vault, External Secrets, a chart-provided static secret, etc.).
+                                  When true, KubeBlocks does not generate a password and does not create or
+                                  rewrite a derived account secret; the user-provided SecretRef is treated as
+                                  the authoritative source, with its password field copied verbatim (including
+                                  empty values) into the per-component account secret consumed by env vars.
+                                  SecretRef must be set when this is true.
+
+
+                                  This field is immutable once set.
                                 type: boolean
                               name:
                                 description: The name of the system account.

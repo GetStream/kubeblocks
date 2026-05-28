@@ -421,6 +421,20 @@ type ComponentSystemAccount struct {
 	//
 	// +optional
 	SecretRef *ProvisionSecretRef `json:"secretRef,omitempty"`
+
+	// ExternallyManaged signals that the account is managed by something outside
+	// KubeBlocks (Vault, External Secrets, a chart-provided static secret, etc.).
+	// When true, KubeBlocks does not generate a password and does not create or
+	// rewrite a derived account secret; the user-provided SecretRef is treated as
+	// the authoritative source, with its password field copied verbatim (including
+	// empty values) into the per-component account secret consumed by env vars.
+	// SecretRef must be set when this is true.
+	//
+	// This field is immutable once set.
+	//
+	// +kubebuilder:default=false
+	// +optional
+	ExternallyManaged *bool `json:"externallyManaged,omitempty"`
 }
 
 // PasswordConfig helps provide to customize complexity of password generation pattern.
