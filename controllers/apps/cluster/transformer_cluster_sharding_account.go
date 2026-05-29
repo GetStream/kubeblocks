@@ -76,6 +76,16 @@ func (t *clusterShardingAccountTransformer) reconcileShardingAccounts(transCtx *
 
 func (t *clusterShardingAccountTransformer) reconcileShardingAccount(transCtx *clusterTransformContext,
 	graphCli model.GraphClient, dag *graph.DAG, sharding *appsv1.ClusterSharding, accountName string) error {
+	// ExternallyManaged: skip consolidation secret + rewrite; SecretRef is authoritative.
+	if compAccount := lookupComponentSystemAccount(sharding, accountName); compAccount != nil &&
+		ptr.Deref(compAccount.ExternallyManaged, false) {
+		if compAccount.SecretRef == nil {
+			return fmt.Errorf("externallyManaged systemAccount %q on sharding %q requires SecretRef",
+				accountName, sharding.Name)
+		}
+		return nil
+	}
+
 	exist, err := t.checkSystemAccountSecret(transCtx, sharding, accountName)
 	if err != nil {
 		return err
@@ -92,6 +102,16 @@ func (t *clusterShardingAccountTransformer) reconcileShardingAccount(transCtx *c
 
 	t.rewriteSystemAccount(transCtx, sharding.Name, accountName)
 
+	return nil
+}
+
+// lookupComponentSystemAccount returns the matching account from sharding's template, or nil.
+func lookupComponentSystemAccount(sharding *appsv1.ClusterSharding, accountName string) *appsv1.ComponentSystemAccount {
+	for i := range sharding.Template.SystemAccounts {
+		if sharding.Template.SystemAccounts[i].Name == accountName {
+			return &sharding.Template.SystemAccounts[i]
+		}
+	}
 	return nil
 }
 
