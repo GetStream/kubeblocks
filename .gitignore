@@ -71,4 +71,4 @@ pkg/cli/cluster/charts/
 .mirrord
 
 # ignore client-sdk-gen temp directory
-hack/github.com/bin/
+hack/github.com/
