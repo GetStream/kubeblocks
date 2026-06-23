@@ -1,0 +1,87 @@
+name: Publish KubeBlocks (GetStream fork)
+
+# Publishes the forked operator IMAGE and CHART to GHCR at one version, so the
+# two never drift. Manual (workflow_dispatch); existing serial.* artifacts are
+# left untouched, this publishes new tags only.
+#
+# Version format (canonical, enforced by the validate job below):
+#
+#   <upstream-base>-getstream.<n>        e.g. 1.0.2-getstream.1
+#
+#   <upstream-base>  the exact upstream KubeBlocks release this fork is rebased
+#                    on. Bump only on a real rebase (1.0.3, 1.1.0, ...).
+#   getstream        fixed org namespace. It is a SemVer PRERELEASE suffix, so
+#                    use '-' (not '+build', which OCI image tags reject).
+#   <n>              fork build counter: increments per build, resets to 1 when
+#                    <upstream-base> changes.
+#
+# The image tag and the chart version are always this same string.
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Fork version <upstream>-getstream.<n>, e.g. 1.0.2-getstream.1'
+        required: true
+        default: '1.0.2-getstream.1'
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Enforce version format
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          re='^[0-9]+\.[0-9]+\.[0-9]+-getstream\.[0-9]+$'
+          if [[ ! "$VERSION" =~ $re ]]; then
+            echo "::error::version '$VERSION' must be <upstream>-getstream.<n>, e.g. 1.0.2-getstream.1"
+            exit 1
+          fi
+
+  image:
+    needs: validate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      # arm64 emulation; the make target creates the multi-arch buildx builder.
+      - uses: docker/setup-qemu-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push operator image (linux/amd64,linux/arm64)
+        run: make push-manager-image IMG=ghcr.io/getstream/kubeblocks VERSION=${{ inputs.version }} BUILDX_ENABLED=true
+
+  chart:
+    needs: image
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: azure/setup-helm@v4
+        with:
+          version: v3.16.4
+
+      - name: Log in to GHCR
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: echo "$GH_TOKEN" | helm registry login ghcr.io -u "${{ github.actor }}" --password-stdin
+
+      # crds/ is no longer .helmignored, so the fork CRDs ship inside the chart.
+      - name: Package and push chart
+        run: |
+          helm package deploy/helm --version "${{ inputs.version }}" --app-version "${{ inputs.version }}"
+          helm push "kubeblocks-${{ inputs.version }}.tgz" oci://ghcr.io/getstream/charts
