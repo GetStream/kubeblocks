@@ -1,0 +1,40 @@
+name: Publish KubeBlocks chart (GetStream fork)
+
+# Packages the forked operator chart (deploy/helm, including its CRDs) and
+# pushes it to GHCR as an OCI artifact: oci://ghcr.io/getstream/charts/kubeblocks.
+# chat's rocky installer pins the operator chart by this version, so keep it in
+# lockstep with the fork controller image tag (e.g. 1.0.2-serial.2).
+#
+# Manual (workflow_dispatch) by design: it mirrors how the fork image is built
+# and pushed, the operator runs this with the version of the image they built.
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Chart version, match the fork image tag (e.g. 1.0.2-serial.2)'
+        required: true
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: azure/setup-helm@v4
+        with:
+          version: v3.16.4
+
+      - name: Log in to GHCR
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: echo "$GH_TOKEN" | helm registry login ghcr.io -u "${{ github.actor }}" --password-stdin
+
+      - name: Package and push chart
+        run: |
+          helm package deploy/helm --version "${{ inputs.version }}" --app-version "${{ inputs.version }}"
+          helm push "kubeblocks-${{ inputs.version }}.tgz" oci://ghcr.io/getstream/charts

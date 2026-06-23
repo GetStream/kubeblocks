@@ -28,5 +28,8 @@ depend-charts/
 # dashboards
 dashboards/
 
-# crds, need to separate installation
-crds/
+# GetStream fork: crds/ is intentionally NOT ignored. Upstream excludes it and
+# installs CRDs via kbcli, but we ship this operator chart as a self-contained
+# OCI artifact, so its CRDs (including the fork's externallyManaged field) must
+# travel with the chart. chat's rocky installer pulls this chart and applies
+# crds/ directly (helm only auto-applies crds/ on install, never on upgrade).
