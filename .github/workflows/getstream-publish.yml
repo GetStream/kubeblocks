@@ -1,12 +1,22 @@
 name: Publish KubeBlocks (GetStream fork)
 
-# Publishes the forked operator IMAGE and CHART to GHCR at one version, so the
-# two never drift. Manual (workflow_dispatch); existing serial.* artifacts are
-# left untouched, this publishes new tags only.
+# Publishes everything the chat rocky installer needs, at ONE version, so they
+# never drift:
+#   - operator image  ghcr.io/getstream/kubeblocks:<v>          (the fork)
+#   - tools image     ghcr.io/getstream/kubeblocks-tools:<v>    (rebuilt; the chart
+#                       derives it from the shared image.registry/image.tag, so it
+#                       must exist under our registry at the same tag)
+#   - CRD bundle      GitHub release <v>, asset kubeblocks-crds.yaml
+#                       (the chart is crds-less: 29 CRDs exceed Helm's 1MB
+#                       release-Secret limit, so they ship as a release asset)
+#   - operator chart  oci://ghcr.io/getstream/charts/kubeblocks:<v>  (crds-less)
+#
+# Manual (workflow_dispatch); existing tags are left untouched, this publishes
+# new ones.
 #
 # Version format (canonical, enforced by the validate job below):
 #
-#   <upstream-base>-getstream.<n>        e.g. 1.0.2-getstream.1
+#   <upstream-base>-getstream.<n>        e.g. 1.0.2-getstream.2
 #
 #   <upstream-base>  the exact upstream KubeBlocks release this fork is rebased
 #                    on. Bump only on a real rebase (1.0.3, 1.1.0, ...).
@@ -14,20 +24,18 @@ name: Publish KubeBlocks (GetStream fork)
 #                    use '-' (not '+build', which OCI image tags reject).
 #   <n>              fork build counter: increments per build, resets to 1 when
 #                    <upstream-base> changes.
-#
-# The image tag and the chart version are always this same string.
 
 on:
   workflow_dispatch:
     inputs:
       version:
-        description: 'Fork version <upstream>-getstream.<n>, e.g. 1.0.2-getstream.1'
+        description: 'Fork version <upstream>-getstream.<n>, e.g. 1.0.2-getstream.2'
         required: true
-        default: '1.0.2-getstream.1'
+        default: '1.0.2-getstream.2'
 
 permissions:
-  contents: read
-  packages: write
+  contents: write # cut the CRD-bundle release
+  packages: write # push images + chart to GHCR
 
 jobs:
   validate:
@@ -39,7 +47,7 @@ jobs:
         run: |
           re='^[0-9]+\.[0-9]+\.[0-9]+-getstream\.[0-9]+$'
           if [[ ! "$VERSION" =~ $re ]]; then
-            echo "::error::version '$VERSION' must be <upstream>-getstream.<n>, e.g. 1.0.2-getstream.1"
+            echo "::error::version '$VERSION' must be <upstream>-getstream.<n>, e.g. 1.0.2-getstream.2"
             exit 1
           fi
 
@@ -48,39 +56,76 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
-
-      # arm64 emulation; the make target creates the multi-arch buildx builder.
+      # arm64 emulation; the make target's install-docker-buildx makes the builder.
       - uses: docker/setup-qemu-action@v3
-
       - uses: docker/login-action@v3
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-
       - name: Build and push operator image (linux/amd64,linux/arm64)
         run: make push-manager-image IMG=ghcr.io/getstream/kubeblocks VERSION=${{ inputs.version }} BUILDX_ENABLED=true
 
-  chart:
-    needs: image
+  tools:
+    needs: validate
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      # NOT forked, rebuilt under our registry only because the chart resolves
+      # the tools image from the shared image.registry + image.tag.
+      - name: Build and push tools image (linux/amd64,linux/arm64)
+        run: make push-tools-image TOOL_IMG=ghcr.io/getstream/kubeblocks-tools VERSION=${{ inputs.version }} BUILDX_ENABLED=true
 
+  crds:
+    needs: validate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Bundle the fork CRDs
+        # Non-recursive on purpose: the glob bundles only the *.kubeblocks.io
+        # CRDs and skips crds/snapshot/, which holds external
+        # snapshot.storage.k8s.io VolumeSnapshot CRDs that the platform (GKE)
+        # owns. Do NOT make this recursive, or we'd clobber them.
+        run: |
+          for f in deploy/helm/crds/*.yaml; do echo '---'; cat "$f"; done > kubeblocks-crds.yaml
+          echo "bundled $(grep -c '^---' kubeblocks-crds.yaml) CRD docs"
+      - name: Publish CRD bundle as a release asset
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # Idempotent: create the release on first run, clobber the asset on re-run.
+          gh release create "${{ inputs.version }}" kubeblocks-crds.yaml \
+            --repo "${{ github.repository }}" --target "${{ github.sha }}" \
+            --title "${{ inputs.version }}" \
+            --notes "Fork operator CRD bundle for ${{ inputs.version }}; applied by chat rocky installKubeBlocks." \
+          || gh release upload "${{ inputs.version }}" kubeblocks-crds.yaml \
+            --repo "${{ github.repository }}" --clobber
+
+  chart:
+    needs: [image, tools, crds]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
       - uses: azure/setup-helm@v4
         with:
           version: v3.16.4
-
       - name: Log in to GHCR
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: echo "$GH_TOKEN" | helm registry login ghcr.io -u "${{ github.actor }}" --password-stdin
-
-      # crds/ is no longer .helmignored, so the fork CRDs ship inside the chart.
+      # crds-less (see .helmignore); CRDs ship as the release asset above.
       - name: Package and push chart
         run: |
           helm package deploy/helm --version "${{ inputs.version }}" --app-version "${{ inputs.version }}"

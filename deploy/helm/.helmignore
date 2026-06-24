@@ -28,8 +28,9 @@ depend-charts/
 # dashboards
 dashboards/
 
-# GetStream fork: crds/ is intentionally NOT ignored. Upstream excludes it and
-# installs CRDs via kbcli, but we ship this operator chart as a self-contained
-# OCI artifact, so its CRDs (including the fork's externallyManaged field) must
-# travel with the chart. chat's rocky installer pulls this chart and applies
-# crds/ directly (helm only auto-applies crds/ on install, never on upgrade).
+# crds/ excluded from the chart: bundling the 29 KubeBlocks CRDs blows past
+# Helm's 1MB release-Secret limit, so `helm upgrade` fails. The fork CRDs ship
+# instead as a `kubeblocks-crds.yaml` GitHub release asset (see
+# getstream-publish.yml), and chat's rocky installer `kubectl apply`s them
+# before installing this (crds-less) chart.
+crds/
