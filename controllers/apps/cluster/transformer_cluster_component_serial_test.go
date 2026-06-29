@@ -25,6 +25,7 @@ import (
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/util/sets"
@@ -132,10 +133,13 @@ func pendingShard(name string) (running, proto *appsv1.Component) {
 	return
 }
 
-// appliedReady shard: running matches proto and is fully reconciled.
+// appliedReady shard: running matches proto, is fully reconciled, and carries the
+// current cluster generation annotation (serialTestCluster Generation is 5) -- i.e.
+// genuinely converged, so the serial rollout skips it.
 func appliedReadyShard(name string) (running, proto *appsv1.Component) {
 	ann := map[string]string{"kubeblocks.io/restart": "now"}
-	running = serialTestComp(name, ann, 2, 2, appsv1.RunningComponentPhase)
+	runAnn := map[string]string{"kubeblocks.io/restart": "now", "kubeblocks.io/generation": "5"}
+	running = serialTestComp(name, runAnn, 2, 2, appsv1.RunningComponentPhase)
 	proto = serialTestComp(name, ann, 0, 0, "")
 	return
 }
@@ -146,6 +150,45 @@ func appliedRollingShard(name string) (running, proto *appsv1.Component) {
 	running = serialTestComp(name, ann, 2, 1, appsv1.UpdatingComponentPhase)
 	proto = serialTestComp(name, ann, 0, 0, "")
 	return
+}
+
+// convergedResidual shard: converged at the cluster generation and ready, but the
+// rebuilt proto differs in a spec field the merge rewrites wholesale (here running
+// carries a memory Limit the proto lacks). This is the production trap behind
+// INF-1421 -- copyAndMergeComponent returns non-nil for an already-converged shard,
+// so the serial rollout must SKIP it rather than re-roll it and starve later shards.
+func convergedResidualShard(name string) (running, proto *appsv1.Component) {
+	runAnn := map[string]string{"kubeblocks.io/restart": "now", "kubeblocks.io/generation": "5"}
+	running = serialTestComp(name, runAnn, 2, 2, appsv1.RunningComponentPhase)
+	running.Spec.Resources.Limits = corev1.ResourceList{corev1.ResourceMemory: resource.MustParse("2Gi")}
+	proto = serialTestComp(name, map[string]string{"kubeblocks.io/restart": "now"}, 0, 0, "")
+	return
+}
+
+// Regression for INF-1421: a converged-but-residually-diffing first shard (sorted
+// first) must not pin the rollout; the serial loop must skip it and advance to the
+// pending shard. Before the fix this re-rolled c1-shard-a forever and never reached b.
+func TestShardingUpdateSerial_SkipsConvergedResidualDiff(t *testing.T) {
+	cluster := &appsv1.Cluster{ObjectMeta: metav1.ObjectMeta{Name: serialTestCluster, Namespace: serialTestNS, Generation: 5}}
+	transCtx := newSerialTestCtx(cluster, ptr.To(appsv1.SerialStrategy))
+	graphCli, dag := newSerialTestGraph(cluster)
+	transCtx.Client = graphCli
+
+	runA, protoA := convergedResidualShard("c1-shard-a") // converged, but a residual diff
+	runB, protoB := pendingShard("c1-shard-b")           // genuinely pending
+	running := map[string]*appsv1.Component{runA.Name: runA, runB.Name: runB}
+	proto := map[string]*appsv1.Component{protoA.Name: protoA, protoB.Name: protoB}
+
+	h := &clusterShardingHandler{}
+	err := h.updateComps(transCtx, dag, serialTestSharding, running, proto, sets.New(runA.Name, runB.Name))
+
+	if !ictrlutil.IsDelayedRequeueError(err) {
+		t.Fatalf("serial update with a remaining shard must requeue, got: %v", err)
+	}
+	got := updatedShardNames(graphCli, dag)
+	if len(got) != 1 || got[0] != "c1-shard-b" {
+		t.Fatalf("serial update must skip the converged-but-residually-diffing first shard and roll the pending one, got: %v", got)
+	}
 }
 
 func TestShardingUpdateSerial_RollsOneShardThenRequeues(t *testing.T) {
