@@ -652,6 +652,22 @@ func componentIsReady(comp *appsv1.Component) bool {
 	return comp.Status.Phase == expect
 }
 
+// shardConverged reports whether a sharding component has already reached the
+// cluster's desired generation and is ready, mirroring the convergence definition
+// checkAllCompsUpToDate uses cluster-wide. The serial rollout skips converged
+// shards so a residual rebuild-vs-persisted diff on one shard cannot re-roll it
+// forever and starve the shards after it.
+func shardConverged(running *appsv1.Component, clusterGen int64) bool {
+	if running == nil {
+		return false
+	}
+	gen, ok := running.Annotations[constant.KubeBlocksGenerationKey]
+	if !ok || gen != strconv.FormatInt(clusterGen, 10) {
+		return false
+	}
+	return componentIsReady(running)
+}
+
 type clusterCompNShardingHandler struct {
 	op      int
 	scaleIn *bool
@@ -926,17 +942,25 @@ func (h *clusterShardingHandler) updateComps(transCtx *clusterTransformContext, 
 	// This keeps the rest of the sharding stable while a shard reconfigures (e.g.
 	// a primary switchover), which the parallel rollout cannot guarantee.
 	if h.serialUpdate(transCtx, shardingName) {
+		clusterGen := transCtx.Cluster.Generation
 		for _, compName := range sets.List(updateSet) {
 			running, proto := runningComps[compName], protoComps[compName]
+			// Skip shards already converged at the desired generation. A converged
+			// shard can still yield a non-nil copyAndMergeComponent diff (the merge
+			// overwrites Spec.Resources wholesale and only normalizes Quantity scale,
+			// so any field a downstream controller persists but the rebuild does not
+			// reproduce reads as a perpetual diff); gating the rollout on that diff
+			// would re-roll the shard forever and never reach the shards after it.
+			if shardConverged(running, clusterGen) {
+				continue
+			}
 			if obj := copyAndMergeComponent(running, proto); obj != nil {
 				graphCli.Update(dag, running, obj)
 				return ictrlutil.NewDelayedRequeueError(0,
 					fmt.Sprintf("serial sharding update: rolling shard %s", compName))
 			}
-			if !componentIsReady(running) {
-				return ictrlutil.NewDelayedRequeueError(0,
-					fmt.Sprintf("serial sharding update: waiting for shard %s to be ready", compName))
-			}
+			return ictrlutil.NewDelayedRequeueError(0,
+				fmt.Sprintf("serial sharding update: waiting for shard %s to be ready", compName))
 		}
 		return nil
 	}
