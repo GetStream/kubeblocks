@@ -10,6 +10,9 @@ on:
 env:
   GH_TOKEN: ${{ secrets.PERSONAL_ACCESS_TOKEN }}
 
+permissions:
+  pull-requests: write
+
 jobs:
   approve-label:
     if: github.event.review.state == 'approved'

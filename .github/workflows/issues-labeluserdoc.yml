@@ -7,6 +7,9 @@ on:
 env:
   GITHUB_TOKEN: ${{ secrets.KUBEBLOCKS_TOKEN }}
 
+permissions:
+  issues: write
+
 jobs:
   User_doc:
     runs-on: ubuntu-latest

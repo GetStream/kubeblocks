@@ -30,6 +30,10 @@ env:
   GH_TOKEN: ${{ github.token }}
   RELEASE_VERSION: ${{ github.ref_name }}
 
+permissions:
+  contents: read
+    packages: write
+
 jobs:
   release-version:
     runs-on: ubuntu-latest

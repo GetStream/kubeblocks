@@ -19,6 +19,10 @@ env:
   PACKAGE_BOT_WEBHOOK: ${{ secrets.PACKAGE_BOT_WEBHOOK }}
   RELEASE_BOT_WEBHOOK: ${{ secrets.RELEASE_BOT_WEBHOOK }}
 
+permissions:
+  contents: read
+    actions: write
+
 
 jobs:
   trigger-release:

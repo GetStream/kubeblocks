@@ -4,6 +4,9 @@ on:
   schedule:
     - cron: '55 1 * * 3' #Runs at 06:06 UTC on Mon
 
+permissions:
+  pull-requests: read
+
 jobs:
   calculate-stats:
     runs-on: ubuntu-latest

@@ -3,6 +3,9 @@ name: Create Release Branch Message
 on:
   create:
 
+permissions:
+  contents: write
+
 run-name: Create Release Branch
 
 jobs:

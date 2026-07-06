@@ -11,6 +11,10 @@ on:
 env:
   GH_TOKEN: ${{ secrets.PERSONAL_ACCESS_TOKEN }}
 
+permissions:
+  contents: read
+    pull-requests: write
+
 jobs:
   cherry-pick:
     if: ${{ github.event.pull_request.merged == true && (github.base_ref == 'main' || startsWith(github.base_ref, 'release-')) }}

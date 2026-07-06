@@ -10,6 +10,9 @@ on:
 env:
   GH_TOKEN: ${{ secrets.PERSONAL_ACCESS_TOKEN }}
 
+permissions:
+  pull-requests: write
+
 jobs:
   approve-label:
     uses: apecloud/apecloud-cd/.github/workflows/pull-request-label.yml@v0.1.61

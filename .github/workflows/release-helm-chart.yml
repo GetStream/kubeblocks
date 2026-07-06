@@ -16,6 +16,10 @@ env:
   RELEASE_VERSION: ${{ github.ref_name }}
   GITHUB_TOKEN: ${{ secrets.PERSONAL_ACCESS_TOKEN }}
 
+permissions:
+  contents: read
+    packages: write
+
 jobs:
   release-version:
     runs-on: ubuntu-latest

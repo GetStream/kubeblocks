@@ -19,6 +19,10 @@ env:
   JIHULAB_ACCESS_TOKEN: ${{ secrets.GITLAB_ACCESS_TOKEN }}
   HELM_VERSION: v3.14.3
 
+permissions:
+  contents: read
+    packages: write
+
 jobs:
   release-version:
     name: release version ${{ inputs.RELEASE_VERSION }}

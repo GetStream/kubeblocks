@@ -51,6 +51,9 @@ run-name: kbcli:${{ inputs.PRE_VERSION }} to ${{ inputs.VERSION }} K3S:${{ input
 env:
   GH_TOKEN: ${{ github.token }}
 
+permissions:
+  contents: read
+
 jobs:
   check:
     runs-on: ubuntu-latest

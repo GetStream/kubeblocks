@@ -11,6 +11,9 @@ env:
   ORGANIZATION: apecloud
   PROJECT_NUMBER: 2
 
+permissions:
+  issues: write
+
 jobs:
   move_milestone:
     uses: apecloud/apecloud-cd/.github/workflows/milestone-move.yml@v0.1.32
