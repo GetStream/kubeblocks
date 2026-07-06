@@ -11,7 +11,7 @@ on:
         default: ''
 
 permissions:
-  contents: read
+  contents: write
 
 run-name: Delete Release:${{ inputs.release-version }}
 
