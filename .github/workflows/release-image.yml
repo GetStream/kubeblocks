@@ -32,7 +32,7 @@ env:
 
 permissions:
   contents: read
-    packages: write
+  packages: write
 
 jobs:
   release-version:

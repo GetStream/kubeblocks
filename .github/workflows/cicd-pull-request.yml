@@ -14,8 +14,8 @@ env:
 
 permissions:
   contents: read
-    actions: write
-    pull-requests: read
+  actions: write
+  pull-requests: read
 
 jobs:
   trigger-mode:
