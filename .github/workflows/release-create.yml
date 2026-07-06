@@ -9,6 +9,9 @@ env:
   GITHUB_TOKEN: ${{ secrets.PERSONAL_ACCESS_TOKEN }}
   RELEASE_BOT_WEBHOOK: ${{ secrets.RELEASE_BOT_WEBHOOK }}
 
+permissions:
+  contents: read
+
 jobs:
   release-create:
     name: create a release

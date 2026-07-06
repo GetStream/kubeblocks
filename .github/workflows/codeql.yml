@@ -10,6 +10,10 @@ env:
   BASE_BRANCH: origin/main
   GO_VERSION: "1.24"
 
+permissions:
+  contents: read
+  security-events: write
+
 jobs:
   trigger-mode:
     runs-on: ubuntu-latest

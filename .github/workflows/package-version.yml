@@ -18,6 +18,9 @@ env:
   GITHUB_TOKEN: ${{ secrets.PERSONAL_ACCESS_TOKEN }}
   GO_VERSION: "1.23"
 
+permissions:
+  contents: read
+
 jobs:
   package-version:
     uses: apecloud/apecloud-cd/.github/workflows/release-version.yml@v0.1.38

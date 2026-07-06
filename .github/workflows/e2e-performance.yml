@@ -48,6 +48,9 @@ on:
           - "1.25"
           - "1.24"
 
+permissions:
+  contents: read
+
 run-name: performance mysql ${{ inputs.NODE_TYPE }} ${{ inputs.PERFORMANCE_TYPE }}
 
 jobs:

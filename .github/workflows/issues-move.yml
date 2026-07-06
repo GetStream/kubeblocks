@@ -9,6 +9,9 @@ on:
 env:
   GITHUB_TOKEN: ${{ secrets.PERSONAL_ACCESS_TOKEN }}
 
+permissions:
+  issues: write
+
 jobs:
   move_issues:
     runs-on: ubuntu-latest

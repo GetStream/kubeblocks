@@ -9,6 +9,9 @@ on:
     types:
       - closed
 
+permissions:
+  issues: write
+
 
 jobs:
   issue-milestone:

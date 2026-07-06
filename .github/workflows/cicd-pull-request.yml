@@ -12,6 +12,11 @@ env:
   BASE_BRANCH: origin/main
   GO_VERSION: "1.24"
 
+permissions:
+  contents: read
+  actions: write
+  pull-requests: read
+
 jobs:
   trigger-mode:
     name: trigger mode

@@ -7,6 +7,10 @@ on:
       - main
       - release-*
 
+permissions:
+  contents: read
+  pull-requests: read
+
 jobs:
   pr-label-check:
     uses: apecloud/apecloud-cd/.github/workflows/pull-request-label-check.yml@v0.1.88
