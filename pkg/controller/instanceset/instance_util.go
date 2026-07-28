@@ -182,10 +182,21 @@ func isImageMatched(pod *corev1.Pod) bool {
 			continue
 		}
 		specImage := container.Image
-		statusImage := resolvedStatusImage(pod.Status.ContainerStatuses[index])
 		// Image in status may not match the image used in the PodSpec.
 		// More info: https://kubernetes.io/docs/reference/kubernetes-api/workload-resources/pod-v1/#PodStatus
 		specName, specTag, specDigest := imageSplit(specImage)
+		// Only a digest-pinned spec may fall back to ImageID, because only then is
+		// the fallback both needed and unambiguous.
+		//
+		// "sha256:<64 hex>" is simultaneously a valid digest and a valid reference
+		// (repository "sha256", tag of 64 hex characters), so no inspection of the
+		// string alone can tell them apart. The spec settles it: a spec carrying no
+		// digest has no use for a repository@digest ImageID anyway, so treating its
+		// status as a reference is always the right reading.
+		statusImage := pod.Status.ContainerStatuses[index].Image
+		if len(specDigest) != 0 {
+			statusImage = resolvedStatusImage(pod.Status.ContainerStatuses[index])
+		}
 		statusName, statusTag, statusDigest := imageSplit(statusImage)
 		if len(specDigest) != 0 {
 			// if digest presents in spec, it must be same in status
@@ -216,6 +227,8 @@ func isImageMatched(pod *corev1.Pod) bool {
 }
 
 // resolvedStatusImage returns the image reference to compare against the PodSpec.
+// Callers must only use it for digest-pinned specs; see the note at its call site
+// on why a tag-only spec must keep reading ContainerStatus.Image verbatim.
 //
 // It exists because container runtimes are allowed to report something other than
 // a reference in ContainerStatus.Image. containerd 2.x, when the PodSpec pins an

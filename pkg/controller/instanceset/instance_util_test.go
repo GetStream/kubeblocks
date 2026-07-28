@@ -1082,6 +1082,31 @@ var _ = Describe("instance util test", func() {
 			pod.Status.ContainerStatuses[0].Image = "sha256:v2"
 			Expect(isImageMatched(pod)).Should(BeFalse())
 		})
+
+		It("should handle a tag that is itself digest-shaped", func() {
+			// The genuinely ambiguous string: repository "sha256" with a 64-hex tag is
+			// valid as BOTH a digest and a reference, so no inspection of the string
+			// can disambiguate it. Only the spec can: it carries no digest, so the
+			// ImageID fallback is skipped and status.Image is read as the reference it
+			// is. Substituting the tagless ImageID here would reject a pod that
+			// matches its spec exactly.
+			const digestShapedTag = "sha256:9f131e79919ba6a525d125e86ad63b98824941b1f7f3b33970598843be3f5b42"
+			pod := builder.NewPodBuilder(namespace, name).GetObject()
+			pod.Spec.Containers = []corev1.Container{{
+				Name:  name,
+				Image: digestShapedTag,
+			}}
+			pod.Status.ContainerStatuses = []corev1.ContainerStatus{{
+				Name:    name,
+				Image:   digestShapedTag,
+				ImageID: "sha256@sha256:ea328a01b5d5201fcb0ee0f0b0a3b0a2b0f8c8d0e0f0a0b0c0d0e0f0a0b0c0d0",
+			}}
+			Expect(isImageMatched(pod)).Should(BeTrue())
+
+			By("a different digest-shaped tag is still a mismatch")
+			pod.Status.ContainerStatuses[0].Image = "sha256:0000000079919ba6a525d125e86ad63b98824941b1f7f3b33970598843be3f5b"
+			Expect(isImageMatched(pod)).Should(BeFalse())
+		})
 	})
 
 	Context("isRoleReady", func() {
