@@ -29,6 +29,7 @@ import (
 	"strings"
 
 	"github.com/klauspost/compress/zstd"
+	"github.com/opencontainers/go-digest"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -242,18 +243,19 @@ func resolvedStatusImage(status corev1.ContainerStatus) string {
 	return status.Image
 }
 
-// isBareDigest reports whether s is a content digest ("<algorithm>:<hex>") rather
-// than an image reference. Image references always carry a name, and a name may
-// not contain ":", so an algorithm-prefixed string with no path separator cannot
-// be one.
+// isBareDigest reports whether s is a content digest ("<algorithm>:<encoded>")
+// rather than an image reference. It defers to go-digest, so the algorithm has to
+// be a registered one and the payload has to be the right encoding and length for
+// it; anything else is treated as a reference and degrades to the previous
+// behaviour.
+//
+// Validating the payload, rather than just the prefix, is what keeps this from
+// being a heuristic: "sha256" is itself a legal repository name, so a tag-only
+// reference such as "sha256:v1" would otherwise be mistaken for a digest, the
+// tagless ImageID substituted for it, and a perfectly matching pod rejected
+// forever, leaving its InstanceSet permanently unready.
 func isBareDigest(s string) bool {
-	algorithm, encoded, found := strings.Cut(s, ":")
-	if !found || len(encoded) == 0 || strings.Contains(s, "/") {
-		return false
-	}
-	// The registry algorithms in practice; anything else is treated as a
-	// reference so an unknown value degrades to the previous behaviour.
-	return algorithm == "sha256" || algorithm == "sha512"
+	return digest.Digest(s).Validate() == nil
 }
 
 // imageSplit separates and returns the name and tag parts
