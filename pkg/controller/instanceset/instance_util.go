@@ -181,7 +181,7 @@ func isImageMatched(pod *corev1.Pod) bool {
 			continue
 		}
 		specImage := container.Image
-		statusImage := pod.Status.ContainerStatuses[index].Image
+		statusImage := resolvedStatusImage(pod.Status.ContainerStatuses[index])
 		// Image in status may not match the image used in the PodSpec.
 		// More info: https://kubernetes.io/docs/reference/kubernetes-api/workload-resources/pod-v1/#PodStatus
 		specName, specTag, specDigest := imageSplit(specImage)
@@ -190,8 +190,13 @@ func isImageMatched(pod *corev1.Pod) bool {
 		if len(specDigest) != 0 && specDigest != statusDigest {
 			return false
 		}
-		// if tag presents in spec, it must be same in status
-		if len(specTag) != 0 && specTag != statusTag {
+		// if tag presents in BOTH, it must be same.
+		//
+		// The status side legitimately carries no tag: status.imageID is a
+		// repository@digest reference, so requiring a tag match there would reject
+		// an image whose digest we just confirmed identical. A digest is a stronger
+		// identity than a tag, so a digest match settles it.
+		if len(specTag) != 0 && len(statusTag) != 0 && specTag != statusTag {
 			return false
 		}
 		// otherwise, statusName should be same as or has suffix of specName
@@ -204,6 +209,48 @@ func isImageMatched(pod *corev1.Pod) bool {
 		}
 	}
 	return true
+}
+
+// resolvedStatusImage returns the image reference to compare against the PodSpec.
+//
+// It exists because container runtimes are allowed to report something other than
+// a reference in ContainerStatus.Image. containerd 2.x, when the PodSpec pins an
+// image by digest, reports a bare content digest of the resolved platform image
+// there and puts the reference the spec actually asked for in ImageID instead:
+//
+//	spec.image      us-east1-docker.pkg.dev/p/r/valkey:9.0.4@sha256:bdf93f…
+//	status.image    sha256:f3d9a8…                      <- config digest, no repository
+//	status.imageID  us-east1-docker.pkg.dev/p/r/valkey@sha256:bdf93f…   <- matches spec
+//
+// A bare digest shares no component with a spec reference, so comparing it makes
+// isImageMatched permanently false for every digest-pinned container. That is not
+// cosmetic: readyReplicas is gated on isImageMatched, so the InstanceSet never
+// reports instances ready, the RuntimeReady lifecycle precondition never passes,
+// and the Component and Cluster stay in Creating forever while the pods are in
+// fact Ready and serving. Observed on GKE with containerd 2.1.7 across every
+// digest-pinned Valkey cluster in the fleet.
+//
+// Tag-pinned specs are unaffected: containerd reports the full reference for
+// those, so this falls through to Image as before.
+func resolvedStatusImage(status corev1.ContainerStatus) string {
+	if isBareDigest(status.Image) && len(status.ImageID) != 0 {
+		return status.ImageID
+	}
+	return status.Image
+}
+
+// isBareDigest reports whether s is a content digest ("<algorithm>:<hex>") rather
+// than an image reference. Image references always carry a name, and a name may
+// not contain ":", so an algorithm-prefixed string with no path separator cannot
+// be one.
+func isBareDigest(s string) bool {
+	algorithm, encoded, found := strings.Cut(s, ":")
+	if !found || len(encoded) == 0 || strings.Contains(s, "/") {
+		return false
+	}
+	// The registry algorithms in practice; anything else is treated as a
+	// reference so an unknown value degrades to the previous behaviour.
+	return algorithm == "sha256" || algorithm == "sha512"
 }
 
 // imageSplit separates and returns the name and tag parts

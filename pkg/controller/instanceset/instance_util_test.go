@@ -941,6 +941,75 @@ var _ = Describe("instance util test", func() {
 			}}
 			Expect(isImageMatched(pod)).Should(BeTrue())
 		})
+
+		It("should match a digest-pinned image whose status reports a bare digest", func() {
+			// containerd 2.x reports the resolved platform image's content digest in
+			// status.image when the spec pinned a digest, and the reference the spec
+			// asked for in status.imageID. Comparing status.image made every
+			// digest-pinned container permanently mismatched, which pinned
+			// readyReplicas at 0 and left Components stuck in Creating with Ready pods.
+			pod := builder.NewPodBuilder(namespace, name).GetObject()
+			pod.Spec.Containers = []corev1.Container{{
+				Name:  name,
+				Image: "us-east1-docker.pkg.dev/p/r/valkey:9.0.4@sha256:bdf93f670fdb",
+			}}
+			pod.Status.ContainerStatuses = []corev1.ContainerStatus{{
+				Name:    name,
+				Image:   "sha256:f3d9a8f9e6a6",
+				ImageID: "us-east1-docker.pkg.dev/p/r/valkey@sha256:bdf93f670fdb",
+			}}
+			Expect(isImageMatched(pod)).Should(BeTrue())
+
+			By("a genuinely different digest in imageID is still a mismatch")
+			pod.Status.ContainerStatuses[0].ImageID = "us-east1-docker.pkg.dev/p/r/valkey@sha256:0000deadbeef"
+			Expect(isImageMatched(pod)).Should(BeFalse())
+
+			By("a different repository in imageID is still a mismatch")
+			pod.Status.ContainerStatuses[0].ImageID = "us-east1-docker.pkg.dev/p/r/postgres@sha256:bdf93f670fdb"
+			Expect(isImageMatched(pod)).Should(BeFalse())
+
+			By("a bare digest with no imageID to fall back to keeps the old behaviour")
+			pod.Status.ContainerStatuses[0].ImageID = ""
+			Expect(isImageMatched(pod)).Should(BeFalse())
+		})
+
+		It("should not treat a real reference as a bare digest", func() {
+			// Tag-pinned specs must keep comparing status.image: containerd reports the
+			// full reference for those, and imageID's digest carries no tag to match.
+			pod := builder.NewPodBuilder(namespace, name).GetObject()
+			pod.Spec.Containers = []corev1.Container{{
+				Name:  name,
+				Image: "us-east1-docker.pkg.dev/p/r/stream-services:v233.12.1",
+			}}
+			pod.Status.ContainerStatuses = []corev1.ContainerStatus{{
+				Name:    name,
+				Image:   "us-east1-docker.pkg.dev/p/r/stream-services:v233.12.1",
+				ImageID: "us-east1-docker.pkg.dev/p/r/stream-services@sha256:b7c8446329",
+			}}
+			Expect(isImageMatched(pod)).Should(BeTrue())
+
+			By("a tag mismatch on a tag-pinned image is still caught")
+			pod.Status.ContainerStatuses[0].Image = "us-east1-docker.pkg.dev/p/r/stream-services:v233.12.0"
+			Expect(isImageMatched(pod)).Should(BeFalse())
+		})
+	})
+
+	Context("isBareDigest", func() {
+		It("should only accept algorithm-prefixed digests", func() {
+			Expect(isBareDigest("sha256:f3d9a8f9e6a6")).Should(BeTrue())
+			Expect(isBareDigest("sha512:f3d9a8f9e6a6")).Should(BeTrue())
+
+			By("references are not bare digests, even digest-bearing ones")
+			Expect(isBareDigest("nginx")).Should(BeFalse())
+			Expect(isBareDigest("nginx:latest")).Should(BeFalse())
+			Expect(isBareDigest("docker.io/nginx@sha256:f3d9a8")).Should(BeFalse())
+			Expect(isBareDigest("registry:5000/nginx")).Should(BeFalse())
+
+			By("unknown algorithms degrade to the previous behaviour")
+			Expect(isBareDigest("md5:f3d9a8")).Should(BeFalse())
+			Expect(isBareDigest("sha256:")).Should(BeFalse())
+			Expect(isBareDigest("")).Should(BeFalse())
+		})
 	})
 
 	Context("isRoleReady", func() {
