@@ -992,6 +992,38 @@ var _ = Describe("instance util test", func() {
 			pod.Status.ContainerStatuses[0].Image = "us-east1-docker.pkg.dev/p/r/stream-services:v233.12.0"
 			Expect(isImageMatched(pod)).Should(BeFalse())
 		})
+
+		It("should reject a tag-only spec whose status cannot prove the tag", func() {
+			// With no digest in the spec the tag is the only identity signal. If the
+			// status side has no tag either, nothing has been verified: the pod may
+			// still be running an older digest under the same repository. Counting it
+			// ready would let an in-place rolling update advance past an un-updated
+			// pod, so this must stay a mismatch.
+			pod := builder.NewPodBuilder(namespace, name).GetObject()
+			pod.Spec.Containers = []corev1.Container{{
+				Name:  name,
+				Image: "us-east1-docker.pkg.dev/p/r/valkey:9.0.4",
+			}}
+
+			By("status reports a bare digest, so imageID (tagless) is used")
+			pod.Status.ContainerStatuses = []corev1.ContainerStatus{{
+				Name:    name,
+				Image:   "sha256:f3d9a8f9e6a6",
+				ImageID: "us-east1-docker.pkg.dev/p/r/valkey@sha256:0000staleimage",
+			}}
+			Expect(isImageMatched(pod)).Should(BeFalse())
+
+			By("status reports a reference that simply omits the tag")
+			pod.Status.ContainerStatuses = []corev1.ContainerStatus{{
+				Name:  name,
+				Image: "us-east1-docker.pkg.dev/p/r/valkey",
+			}}
+			Expect(isImageMatched(pod)).Should(BeFalse())
+
+			By("a spec with neither tag nor digest has nothing to verify, as before")
+			pod.Spec.Containers[0].Image = "us-east1-docker.pkg.dev/p/r/valkey"
+			Expect(isImageMatched(pod)).Should(BeTrue())
+		})
 	})
 
 	Context("isBareDigest", func() {

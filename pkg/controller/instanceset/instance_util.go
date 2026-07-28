@@ -186,17 +186,20 @@ func isImageMatched(pod *corev1.Pod) bool {
 		// More info: https://kubernetes.io/docs/reference/kubernetes-api/workload-resources/pod-v1/#PodStatus
 		specName, specTag, specDigest := imageSplit(specImage)
 		statusName, statusTag, statusDigest := imageSplit(statusImage)
-		// if digest presents in spec, it must be same in status
-		if len(specDigest) != 0 && specDigest != statusDigest {
-			return false
-		}
-		// if tag presents in BOTH, it must be same.
-		//
-		// The status side legitimately carries no tag: status.imageID is a
-		// repository@digest reference, so requiring a tag match there would reject
-		// an image whose digest we just confirmed identical. A digest is a stronger
-		// identity than a tag, so a digest match settles it.
-		if len(specTag) != 0 && len(statusTag) != 0 && specTag != statusTag {
+		if len(specDigest) != 0 {
+			// if digest presents in spec, it must be same in status
+			if specDigest != statusDigest {
+				return false
+			}
+			// A matching digest is a complete identity proof, so the tag is
+			// redundant, and the status side legitimately has none: ImageID is a
+			// repository@digest reference. Comparing tags here would reject an image
+			// just confirmed byte-identical.
+		} else if len(specTag) != 0 && specTag != statusTag {
+			// With no digest in the spec the tag is the ONLY identity signal, so an
+			// absent or differing status tag is unverifiable rather than acceptable.
+			// Tolerating it would let a pod still running an older digest count as
+			// ready and allow an in-place rolling update to advance past it.
 			return false
 		}
 		// otherwise, statusName should be same as or has suffix of specName
