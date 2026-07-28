@@ -29,6 +29,7 @@ import (
 	"strings"
 
 	"github.com/klauspost/compress/zstd"
+	"github.com/opencontainers/go-digest"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -181,17 +182,36 @@ func isImageMatched(pod *corev1.Pod) bool {
 			continue
 		}
 		specImage := container.Image
-		statusImage := pod.Status.ContainerStatuses[index].Image
 		// Image in status may not match the image used in the PodSpec.
 		// More info: https://kubernetes.io/docs/reference/kubernetes-api/workload-resources/pod-v1/#PodStatus
 		specName, specTag, specDigest := imageSplit(specImage)
-		statusName, statusTag, statusDigest := imageSplit(statusImage)
-		// if digest presents in spec, it must be same in status
-		if len(specDigest) != 0 && specDigest != statusDigest {
-			return false
+		// Only a digest-pinned spec may fall back to ImageID, because only then is
+		// the fallback both needed and unambiguous.
+		//
+		// "sha256:<64 hex>" is simultaneously a valid digest and a valid reference
+		// (repository "sha256", tag of 64 hex characters), so no inspection of the
+		// string alone can tell them apart. The spec settles it: a spec carrying no
+		// digest has no use for a repository@digest ImageID anyway, so treating its
+		// status as a reference is always the right reading.
+		statusImage := pod.Status.ContainerStatuses[index].Image
+		if len(specDigest) != 0 {
+			statusImage = resolvedStatusImage(pod.Status.ContainerStatuses[index])
 		}
-		// if tag presents in spec, it must be same in status
-		if len(specTag) != 0 && specTag != statusTag {
+		statusName, statusTag, statusDigest := imageSplit(statusImage)
+		if len(specDigest) != 0 {
+			// if digest presents in spec, it must be same in status
+			if specDigest != statusDigest {
+				return false
+			}
+			// A matching digest is a complete identity proof, so the tag is
+			// redundant, and the status side legitimately has none: ImageID is a
+			// repository@digest reference. Comparing tags here would reject an image
+			// just confirmed byte-identical.
+		} else if len(specTag) != 0 && specTag != statusTag {
+			// With no digest in the spec the tag is the ONLY identity signal, so an
+			// absent or differing status tag is unverifiable rather than acceptable.
+			// Tolerating it would let a pod still running an older digest count as
+			// ready and allow an in-place rolling update to advance past it.
 			return false
 		}
 		// otherwise, statusName should be same as or has suffix of specName
@@ -204,6 +224,51 @@ func isImageMatched(pod *corev1.Pod) bool {
 		}
 	}
 	return true
+}
+
+// resolvedStatusImage returns the image reference to compare against the PodSpec.
+// Callers must only use it for digest-pinned specs; see the note at its call site
+// on why a tag-only spec must keep reading ContainerStatus.Image verbatim.
+//
+// It exists because container runtimes are allowed to report something other than
+// a reference in ContainerStatus.Image. containerd 2.x, when the PodSpec pins an
+// image by digest, reports a bare content digest of the resolved platform image
+// there and puts the reference the spec actually asked for in ImageID instead:
+//
+//	spec.image      us-east1-docker.pkg.dev/p/r/valkey:9.0.4@sha256:bdf93f…
+//	status.image    sha256:f3d9a8…                      <- config digest, no repository
+//	status.imageID  us-east1-docker.pkg.dev/p/r/valkey@sha256:bdf93f…   <- matches spec
+//
+// A bare digest shares no component with a spec reference, so comparing it makes
+// isImageMatched permanently false for every digest-pinned container. That is not
+// cosmetic: readyReplicas is gated on isImageMatched, so the InstanceSet never
+// reports instances ready, the RuntimeReady lifecycle precondition never passes,
+// and the Component and Cluster stay in Creating forever while the pods are in
+// fact Ready and serving. Observed on GKE with containerd 2.1.7 across every
+// digest-pinned Valkey cluster in the fleet.
+//
+// Tag-pinned specs are unaffected: containerd reports the full reference for
+// those, so this falls through to Image as before.
+func resolvedStatusImage(status corev1.ContainerStatus) string {
+	if isBareDigest(status.Image) && len(status.ImageID) != 0 {
+		return status.ImageID
+	}
+	return status.Image
+}
+
+// isBareDigest reports whether s is a content digest ("<algorithm>:<encoded>")
+// rather than an image reference. It defers to go-digest, so the algorithm has to
+// be a registered one and the payload has to be the right encoding and length for
+// it; anything else is treated as a reference and degrades to the previous
+// behaviour.
+//
+// Validating the payload, rather than just the prefix, is what keeps this from
+// being a heuristic: "sha256" is itself a legal repository name, so a tag-only
+// reference such as "sha256:v1" would otherwise be mistaken for a digest, the
+// tagless ImageID substituted for it, and a perfectly matching pod rejected
+// forever, leaving its InstanceSet permanently unready.
+func isBareDigest(s string) bool {
+	return digest.Digest(s).Validate() == nil
 }
 
 // imageSplit separates and returns the name and tag parts
