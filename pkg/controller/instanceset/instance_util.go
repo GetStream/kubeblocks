@@ -29,7 +29,6 @@ import (
 	"strings"
 
 	"github.com/klauspost/compress/zstd"
-	"github.com/opencontainers/go-digest"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -231,44 +230,39 @@ func isImageMatched(pod *corev1.Pod) bool {
 // on why a tag-only spec must keep reading ContainerStatus.Image verbatim.
 //
 // It exists because container runtimes are allowed to report something other than
-// a reference in ContainerStatus.Image. containerd 2.x, when the PodSpec pins an
-// image by digest, reports a bare content digest of the resolved platform image
-// there and puts the reference the spec actually asked for in ImageID instead:
+// the spec reference in ContainerStatus.Image, in at least two forms that both
+// lack a digest. containerd 2.x reports a bare content digest of the resolved
+// platform image when the pull resolved through a digest, and the plain reference
+// it pulled when it did not, putting the digest-bearing reference in ImageID both
+// times:
 //
 //	spec.image      us-east1-docker.pkg.dev/p/r/valkey:9.0.4@sha256:bdf93f…
-//	status.image    sha256:f3d9a8…                      <- config digest, no repository
-//	status.imageID  us-east1-docker.pkg.dev/p/r/valkey@sha256:bdf93f…   <- matches spec
+//	status.image    sha256:f3d9a8…                     <- config digest, no repository
+//	   or           us-east1-docker.pkg.dev/p/r/valkey:9.0.4  <- reference, no digest
+//	status.imageID  docker.io/valkey/valkey@sha256:bdf93f…    <- carries the digest
 //
-// A bare digest shares no component with a spec reference, so comparing it makes
-// isImageMatched permanently false for every digest-pinned container. That is not
-// cosmetic: readyReplicas is gated on isImageMatched, so the InstanceSet never
-// reports instances ready, the RuntimeReady lifecycle precondition never passes,
-// and the Component and Cluster stay in Creating forever while the pods are in
-// fact Ready and serving. Observed on GKE with containerd 2.1.7 across every
-// digest-pinned Valkey cluster in the fleet.
+// Neither form can verify a digest-pinned spec on its own, so comparing against
+// them makes isImageMatched permanently false. That is not cosmetic: readyReplicas
+// is gated on isImageMatched, so the InstanceSet never reports those instances
+// ready, the RuntimeReady lifecycle precondition never passes, and the Component
+// and Cluster sit in Creating or Updating while the pods are in fact Ready and
+// serving. Observed on GKE with containerd 2.1.7: which of the two forms a pod
+// gets is decided at pull time, so sibling replicas of one shard disagree and the
+// shard reports 1/2 ready forever.
 //
-// Tag-pinned specs are unaffected: containerd reports the full reference for
-// those, so this falls through to Image as before.
+// Absence of a digest is the whole test. It subsumes the bare-digest form, and it
+// needs no guess about which form a runtime chose: a status image that carries a
+// digest is compared as before, and one that does not defers to ImageID, which is
+// the only value that can settle a digest-pinned spec. A mismatched ImageID still
+// fails the comparison, so a pod genuinely running an older image stays unready.
 func resolvedStatusImage(status corev1.ContainerStatus) string {
-	if isBareDigest(status.Image) && len(status.ImageID) != 0 {
-		return status.ImageID
+	if len(status.ImageID) == 0 {
+		return status.Image
 	}
-	return status.Image
-}
-
-// isBareDigest reports whether s is a content digest ("<algorithm>:<encoded>")
-// rather than an image reference. It defers to go-digest, so the algorithm has to
-// be a registered one and the payload has to be the right encoding and length for
-// it; anything else is treated as a reference and degrades to the previous
-// behaviour.
-//
-// Validating the payload, rather than just the prefix, is what keeps this from
-// being a heuristic: "sha256" is itself a legal repository name, so a tag-only
-// reference such as "sha256:v1" would otherwise be mistaken for a digest, the
-// tagless ImageID substituted for it, and a perfectly matching pod rejected
-// forever, leaving its InstanceSet permanently unready.
-func isBareDigest(s string) bool {
-	return digest.Digest(s).Validate() == nil
+	if _, _, statusDigest := imageSplit(status.Image); len(statusDigest) != 0 {
+		return status.Image
+	}
+	return status.ImageID
 }
 
 // imageSplit separates and returns the name and tag parts

@@ -973,6 +973,33 @@ var _ = Describe("instance util test", func() {
 			Expect(isImageMatched(pod)).Should(BeFalse())
 		})
 
+		It("should match a digest-pinned image whose status reports a tagged reference", func() {
+			// The second form containerd 2.x reports: not a bare digest but the plain
+			// reference it pulled, with no digest attached, while imageID carries the
+			// digest. Which form a pod gets is decided at pull time, so two replicas of
+			// one shard can disagree and the shard reports 1/2 ready forever with both
+			// pods Ready and serving. Seen on us-east4:c10 after its pods moved pools.
+			pod := builder.NewPodBuilder(namespace, name).GetObject()
+			pod.Spec.Containers = []corev1.Container{{
+				Name:  name,
+				Image: "docker.io/valkey/valkey:9.0.4@sha256:0ea765270db3ebcfc19fb3d0f90293721a6048ef7268b78d52a6ac78094c2b7b",
+			}}
+			pod.Status.ContainerStatuses = []corev1.ContainerStatus{{
+				Name:    name,
+				Image:   "us-east1-docker.pkg.dev/p/r/dockerhub-remote/valkey/valkey:9.0.4",
+				ImageID: "docker.io/valkey/valkey@sha256:0ea765270db3ebcfc19fb3d0f90293721a6048ef7268b78d52a6ac78094c2b7b",
+			}}
+			Expect(isImageMatched(pod)).Should(BeTrue())
+
+			By("a genuinely different digest in imageID is still a mismatch")
+			pod.Status.ContainerStatuses[0].ImageID = "docker.io/valkey/valkey@sha256:ea328a01b5d5201fc24abad33aa12185e4b3a9e3304a9c948d171dd25f978d07"
+			Expect(isImageMatched(pod)).Should(BeFalse())
+
+			By("a tagged reference with no imageID to fall back to stays a mismatch")
+			pod.Status.ContainerStatuses[0].ImageID = ""
+			Expect(isImageMatched(pod)).Should(BeFalse())
+		})
+
 		It("should not treat a real reference as a bare digest", func() {
 			// Tag-pinned specs must keep comparing status.image: containerd reports the
 			// full reference for those, and imageID's digest carries no tag to match.
@@ -1023,40 +1050,6 @@ var _ = Describe("instance util test", func() {
 			By("a spec with neither tag nor digest has nothing to verify, as before")
 			pod.Spec.Containers[0].Image = "us-east1-docker.pkg.dev/p/r/valkey"
 			Expect(isImageMatched(pod)).Should(BeTrue())
-		})
-	})
-
-	Context("isBareDigest", func() {
-		It("should only accept algorithm-prefixed digests", func() {
-			Expect(isBareDigest("sha256:9f131e79919ba6a525d125e86ad63b98824941b1f7f3b33970598843be3f5b42")).Should(BeTrue())
-			Expect(isBareDigest("sha512:a4abd4448c49562d828115d13a1fccea927f52b4d5459297f8b43e42da89238bc13626e43dcb38ddb082488927ec904fb42057443983e88585179d50551afe62")).Should(BeTrue())
-
-			By("references are not bare digests, even digest-bearing ones")
-			Expect(isBareDigest("nginx")).Should(BeFalse())
-			Expect(isBareDigest("nginx:latest")).Should(BeFalse())
-			Expect(isBareDigest("docker.io/nginx@sha256:9f131e79919ba6a525d125e86ad63b98824941b1f7f3b33970598843be3f5b42")).Should(BeFalse())
-			Expect(isBareDigest("registry:5000/nginx")).Should(BeFalse())
-
-			By("unknown algorithms degrade to the previous behaviour")
-			Expect(isBareDigest("md5:f3d9a8")).Should(BeFalse())
-			Expect(isBareDigest("sha256:")).Should(BeFalse())
-			Expect(isBareDigest("")).Should(BeFalse())
-
-			By("a repository legitimately NAMED sha256 is a reference, not a digest")
-			// "sha256" is a legal repository name, so a tag-only reference like
-			// sha256:v1 must not be mistaken for a digest. Validating the payload
-			// length and encoding, not just the prefix, is what rules it out; a
-			// prefix-only check would substitute the tagless ImageID here and reject
-			// a matching pod forever.
-			Expect(isBareDigest("sha256:v1")).Should(BeFalse())
-			Expect(isBareDigest("sha256:latest")).Should(BeFalse())
-			Expect(isBareDigest("sha512:v1")).Should(BeFalse())
-
-			By("payloads of the wrong length or encoding for the algorithm")
-			Expect(isBareDigest("sha256:f3d9a8f9e6a6")).Should(BeFalse())                                                       // too short
-			Expect(isBareDigest("sha256:9f131e79919ba6a525d125e86ad63b98824941b1f7f3b33970598843be3f5b42ab")).Should(BeFalse()) // too long
-			Expect(isBareDigest("sha256:zzz1e79919ba6a525d125e86ad63b98824941b1f7f3b33970598843be3f5b42")).Should(BeFalse())    // not hex
-			Expect(isBareDigest("sha512:9f131e79919ba6a525d125e86ad63b98824941b1f7f3b33970598843be3f5b42")).Should(BeFalse())   // sha256 length under sha512
 		})
 	})
 
