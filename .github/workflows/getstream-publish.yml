@@ -90,7 +90,7 @@ jobs:
 
   crds:
     needs: validate
-    runs-on: ubuntu-latest
+    runs-on: { group: github-public-amd64 }
     steps:
       - uses: actions/checkout@v4
       - name: Bundle the fork CRDs
@@ -115,7 +115,7 @@ jobs:
 
   chart:
     needs: [image, tools, crds]
-    runs-on: ubuntu-latest
+    runs-on: { group: github-public-amd64 }
     steps:
       - uses: actions/checkout@v4
       - uses: azure/setup-helm@v4
