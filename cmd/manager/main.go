@@ -36,6 +36,7 @@ import (
 	"github.com/pkg/errors"
 	"github.com/spf13/pflag"
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/labels"
 	k8sruntime "k8s.io/apimachinery/pkg/runtime"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	discoverycli "k8s.io/client-go/discovery"
@@ -43,6 +44,7 @@ import (
 	_ "k8s.io/client-go/plugin/pkg/client/auth"
 	"k8s.io/utils/ptr"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/cache"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/config"
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
@@ -383,6 +385,13 @@ func main() {
 			Port:    9443,
 			CertDir: viper.GetString("cert_dir"),
 		}),
+		Cache: cache.Options{
+			ByObject: map[client.Object]cache.ByObject{
+				&corev1.Secret{}: {
+					Label: labels.SelectorFromSet(labels.Set{constant.AppManagedByLabelKey: constant.AppName}),
+				},
+			},
+		},
 		Client: client.Options{
 			Cache: &client.CacheOptions{
 				DisableFor: append(intctrlutil.GetUncachedObjects(), &parametersv1alpha1.ComponentParameter{}),
