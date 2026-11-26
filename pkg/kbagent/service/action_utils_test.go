@@ -32,6 +32,7 @@ import (
 	"os/exec"
 	"strconv"
 	"strings"
+	"time"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -50,6 +51,24 @@ import (
 )
 
 var _ = Describe("action utils", func() {
+	Context("action call timeout", func() {
+		deadlineIn := func(timeout int32) time.Duration {
+			ctx, cancel := actionCallTimeoutContext(context.Background(), &timeout)
+			defer cancel()
+			deadline, ok := ctx.Deadline()
+			Expect(ok).Should(BeTrue())
+			return time.Until(deadline)
+		}
+
+		It("honors a 360s switchover timeout", func() {
+			Expect(deadlineIn(360)).Should(BeNumerically("~", 360*time.Second, time.Second))
+		})
+
+		It("caps longer timeouts", func() {
+			Expect(deadlineIn(900)).Should(BeNumerically("~", maxActionCallTimeout, time.Second))
+		})
+	})
+
 	wait := func(errChan chan error) {
 		Expect(errChan).ShouldNot(BeNil())
 		err, ok := <-errChan
