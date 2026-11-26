@@ -60,7 +60,8 @@ const (
 	defaultMaxIdleConnectionsPerHost = 20
 
 	defaultActionCallTimeout = 30 * time.Second
-	maxActionCallTimeout     = 60 * time.Second
+	// Valkey's switchover asks for 360s; a lower cap kills it and the primary is then deleted without a handoff.
+	maxActionCallTimeout = 360 * time.Second
 
 	defaultHTTPHost   = "127.0.0.1"
 	defaultHTTPScheme = "HTTP"
